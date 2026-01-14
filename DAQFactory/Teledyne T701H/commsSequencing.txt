@@ -1,0 +1,65 @@
+//NEW COMMS SEQUENCING FOR TELEDYNE T701H ZERO AIR GENERATOR\\
+
+//declare this in init
+global ZAG_1 = new(CCommEthernet)
+ZAG_1.Address = "192.168.1.187"
+ZAG_1.Port = 502
+ZAG_1.Timeout = 1000
+ZAG_1.InitComm()
+
+global ZAG_1_dev = new(CCommDevice)
+ZAG_1_dev.PortObject = ZAG_1
+ZAG_1_dev.ProtocolName = "ModbusTCP"
+
+
+//acquire_ZAG_1 sequence
+Channel.Add("t701h_027090_TankPressure","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_OutputPressure","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_HCScrubberTemp","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_BoxTemp","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_PumpDuty","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_HeaterDuty","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_ServiceRemaining","test",1,"A to D",0,0,0,"","ZAG_1")
+Channel.Add("t701h_027090_RefVoltage","test",1,"A to D",0,0,0,"","ZAG_1")
+
+global ZAG_1_array
+
+while(1)
+   ZAG_1_array = ZAG_1_dev.ReadInputFloat(1,0,8)
+   t701h_027090_TankPressure.AddValue(ZAG_1_array[0][0])
+   t701h_027090_OutputPressure.AddValue(ZAG_1_array[0][1])
+   t701h_027090_HCScrubberTemp.AddValue(ZAG_1_array[0][2])
+   t701h_027090_BoxTemp.AddValue(ZAG_1_array[0][3])
+   t701h_027090_PumpDuty.AddValue(ZAG_1_array[0][4])
+   t701h_027090_HeaterDuty.AddValue(ZAG_1_array[0][5])
+   t701h_027090_ServiceRemaining.AddValue(ZAG_1_array[0][6])
+   t701h_027090_RefVoltage.AddValue(ZAG_1_array[0][7])
+   delay(10)
+endwhile
+
+
+//BEGIN LOGGING SEQUENCE
+// On first setup
+// Make an empty loggingSet in the UI called `ZAG_1`
+// Set to fixed interval and define averaging period
+
+private string allChannelNames = channel.ListAll("ZAG_1")
+private string prefix = "ZAG_1_"
+private string fp = fpZAG_1 //this should be included in the file pathway init section
+
+for(private i = 0, i < numRows(allChannelNames), i++)
+   logging.ZAG_1.AddChannel(allChannelNames[i])
+endfor
+
+logging.ZAG_1.strLoggingMethod = "ASCII Delimited"
+logging.ZAG_1.strDelimiter = ","
+logging.ZAG_1.strFileName = fp+FormatDateTime("%Y",SysTime())+"/"+FormatDateTime("%m",SysTime())+"/"+prefix+FormatDateTime("%y%m%d_%H%M%S.csv",SysTime()) 
+
+logging.ZAG_1.Start()
+
+while(1)
+   
+   waituntil(0h+86400)
+   logging.ZAG_1.strFileName = fp+FormatDateTime("%Y",SysTime())+"/"+FormatDateTime("%m",SysTime())+"/"+prefix+FormatDateTime("%y%m%d_%H%M%S.csv",SysTime())
+   
+endwhile
