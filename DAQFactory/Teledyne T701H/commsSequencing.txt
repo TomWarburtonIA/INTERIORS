@@ -13,6 +13,8 @@ ZAG_1_dev.ProtocolName = "ModbusTCP"
 
 
 //acquire_ZAG_1 sequence
+global ZAG_1_array
+
 Channel.Add("t701h_027090_TankPressure","test",1,"A to D",0,0,0,"","ZAG_1")
 Channel.Add("t701h_027090_OutputPressure","test",1,"A to D",0,0,0,"","ZAG_1")
 Channel.Add("t701h_027090_HCScrubberTemp","test",1,"A to D",0,0,0,"","ZAG_1")
@@ -22,20 +24,35 @@ Channel.Add("t701h_027090_HeaterDuty","test",1,"A to D",0,0,0,"","ZAG_1")
 Channel.Add("t701h_027090_ServiceRemaining","test",1,"A to D",0,0,0,"","ZAG_1")
 Channel.Add("t701h_027090_RefVoltage","test",1,"A to D",0,0,0,"","ZAG_1")
 
-global ZAG_1_array
-
 while(1)
-   ZAG_1_array = ZAG_1_dev.ReadInputFloat(1,0,8)
-   t701h_027090_TankPressure.AddValue(ZAG_1_array[0][0])
-   t701h_027090_OutputPressure.AddValue(ZAG_1_array[0][1])
-   t701h_027090_HCScrubberTemp.AddValue(ZAG_1_array[0][2])
-   t701h_027090_BoxTemp.AddValue(ZAG_1_array[0][3])
-   t701h_027090_PumpDuty.AddValue(ZAG_1_array[0][4])
-   t701h_027090_HeaterDuty.AddValue(ZAG_1_array[0][5])
-   t701h_027090_ServiceRemaining.AddValue(ZAG_1_array[0][6])
-   t701h_027090_RefVoltage.AddValue(ZAG_1_array[0][7])
-   delay(10)
+
+   try
+
+      // attempt the Modbus read
+      ZAG_1_array = ZAG_1_dev.ReadInputFloat(1,0,8)
+      // add channel values
+      t701h_027090_TankPressure.AddValue(ZAG_1_array[0][0])
+      t701h_027090_OutputPressure.AddValue(ZAG_1_array[0][1])
+      t701h_027090_HCScrubberTemp.AddValue(ZAG_1_array[0][2])
+      t701h_027090_BoxTemp.AddValue(ZAG_1_array[0][3])
+      t701h_027090_PumpDuty.AddValue(ZAG_1_array[0][4])
+      t701h_027090_HeaterDuty.AddValue(ZAG_1_array[0][5])
+      t701h_027090_ServiceRemaining.AddValue(ZAG_1_array[0][6])
+      t701h_027090_RefVoltage.AddValue(ZAG_1_array[0][7])
+
+   catch()
+      // log the error message
+      ? "ZAG_1 Modbus read error: " + strLastError
+
+      delay(1)
+      ZAG_1.InitComm() //keeps the sequence running so it can automatically restart acquisition, otherwise the sequence stops
+
+   endcatch
+
+   delay(5)  
+
 endwhile
+
 
 
 //BEGIN LOGGING SEQUENCE
