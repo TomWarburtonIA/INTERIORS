@@ -1,1 +1,4 @@
+NOTE: THESE SEQUENCES HAVE BEEN SUPERSEDED BY THE NEW MODBUS TCP CLASS INCLUDED IN THE NEW classInstrument()
+
+
 The Teledyne T701H does not communicate through Data acquisition system (DAS) commands in ways similar to the T200up or T400. It only communicates through Modbus TCP over ethernet (or Modbus RTU through RS232). To keep comms in line with other instruments, these sequences allows for communications to be initiated through IP (once the instrument has been configured with an IP address, using Lantronix DeviceInstaller) using the standard Modbus TCP port of 502, and reading in all the input float registers into an array in DAQFactory. Each array element is then added to the respective channel, and this is repeated every time increment of your choosing. Not the easiest solution, but it allows the instrument and channels to be controlled programatically rather than manually.
