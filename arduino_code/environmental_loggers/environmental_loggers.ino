@@ -1,99 +1,299 @@
+// ============================================================
+// INTERIORS temperature and relative humidity sensor loggers
+// ============================================================
+//
+// The following code is uploaded to each Wiznet W5500 EVB Pico2
+// to handle data processing and polling for MetOne 085a 
+// temperature and relative humidity probes. PCB designs are 
+// held in the INTERIORS GitHub repo.
+//
+// To run this code yourself on a Wiznet W5500 EVB Pico2 in the
+// Arduino IDE, you must first install the Wiznet boards. 
+// Instructions for this can be found here:
+// https://maker.wiznet.io/matthew/projects/how-to-use-wiznet-evb-pico2-in-arduino-ide/
+
 #include <SPI.h>
-#include <Ethernet.h>
 #include <Wire.h>
+#include <EthernetCompat.h>   
 #include <Adafruit_ADS1X15.h>
 
-// ================= NETWORK CONFIG =================
-byte mac[] = { 0x02, 0xA0, 0x01, 0x00, 0x00, 0x02 }; // change to whatever you need it to be
-IPAddress ip(192, 168, 1, 201); // change to whatever you need it to be
-IPAddress gateway(192, 168, 1, 1); // change to whatever you need it to be
-IPAddress subnet(255, 255, 255, 0); // change to whatever you need it to be
+#define W5500_MISO   16
+#define W5500_CS     17
+#define W5500_SCLK   18
+#define W5500_MOSI   19
+#define W5500_RESET  20
+#define W5500_INT    21
 
-EthernetServer server(5025); // change to whatever you need it to be
+Wiznet5500lwIP eth(W5500_CS, SPI, W5500_INT);
 
-// ================= ADC =================
-Adafruit_ADS1115 ads;   // default I2C addr 0x48
+// ============================================================
+// Ethernet static IP configuration
+// ============================================================
 
-// ================= MEASUREMENTS =================
-float temperature;
-float humidity;
-float irradiance;
+IPAddress ip(192, 168, 1, 190);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress dns(8, 8, 8, 8);
 
-// ============== TEMP CALIBRATION ===================
-const float tempV1 = 2.137;   // volts at -30C
-const float tempT1 = -30.0;
-const float tempV2 = 0.778;   // volts at +50C
-const float tempT2 = 50.0;
-float tempSlope;
-float tempIntercept;
+// ============================================================
+// TCP command server
+//
+// This is configured to receive an 'A' over ASCII, upon which
+// it will then transmit the calculated temperature (2 d.p) 
+// and the relative humidity (1 d.p), separated by a comma.
+// ============================================================
 
-// ============== HUMIDITY CALIBRATION ===============
-const float humV1 = 1.0;   // volts at 100%
-const float humH1 = 100.0;
-const float humV2 = 0.0;   // volts at 0%
-const float humH2 = 0.0;
-float humSlope;
-float humIntercept;
+#define TCP_PORT 5000
 
-// ================= SETUP =================
-void setup() {
-  Ethernet.init(10);
-  Ethernet.begin(mac, ip, gateway, gateway, subnet);
-  server.begin();
+EthernetServer server(TCP_PORT);
+EthernetClient client;
 
-  // ADS1115 setup
-  ads.begin();
-  ads.setGain(GAIN_ONE);   // ±4.096V range
+// ============================================================
+// ADS1115 I2C configuration
+// ============================================================
 
-  // Precompute calibration lines
-  tempSlope = (tempT2 - tempT1) / (tempV2 - tempV1);
-  tempIntercept = tempT1 - tempSlope * tempV1;
+#define I2C_SDA 4
+#define I2C_SCL 5
 
-  humSlope = (humH2 - humH1) / (humV2 - humV1);
-  humIntercept = humH1 - humSlope * humV1;
+#define ADS1115_ADDRESS 0x48
+
+Adafruit_ADS1115 ads;
+
+// ============================================================
+// Thermistor calibration
+// ADS1115 A3 pin
+// ============================================================
+// This uses a Met One 085a T/RH sensor, the temperature
+// signal being divided through an 18k7 Ohm precision resistor,
+// itself fed by a LM4040 2.5V shunt acting as a reference
+// voltage. Calibration values are:
+//
+// -30 C = 2.137 V
+// +50 C = 0.778 V
+
+const float TEMP_LOW_C = -30.0;
+const float TEMP_LOW_V = 2.137;
+
+const float TEMP_HIGH_C = 50.0;
+const float TEMP_HIGH_V = 0.778;
+
+// ============================================================
+// Latest readings (updated by readSensors)
+// ============================================================
+
+float temperatureC     = 0.0;
+float relativeHumidity = 0.0;
+
+
+// ============================================================
+// Fatal init error: blink the onboard LED forever
+//
+// fast blink (100 ms) = W5500 not detected
+// slow blink (500 ms) = ADS1115 not detected
+// ============================================================
+
+void haltBlink(unsigned long periodMs)
+{
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  while (true)
+  {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(periodMs);
+
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(periodMs);
+  }
 }
 
-// ================= MAIN LOOP =================
-void loop() {
 
-  // ---------- READ ADC ----------
-  int16_t rawTemp = ads.readADC_SingleEnded(0);
-  int16_t rawHum  = ads.readADC_SingleEnded(1);
-  int16_t rawIrr  = ads.readADC_SingleEnded(2);
+// ============================================================
+// Convert thermistor voltage to temperature
+// ============================================================
 
-  // Convert to volts (ADS1115: 32768 counts = full scale)
-  float tempV = rawTemp * (4.096 / 32768.0);
-  float humV  = rawHum  * (4.096 / 32768.0);
-  float irrV  = rawIrr  * (4.096 / 32768.0);
+float thermistorVoltageToTemperature(float voltage)
+{
+  float temperature =
+      TEMP_LOW_C +
+      ((voltage - TEMP_LOW_V) *
+      (TEMP_HIGH_C - TEMP_LOW_C) /
+      (TEMP_HIGH_V - TEMP_LOW_V));
 
-  // ---------- CONVERT ----------
-  temperature = tempSlope * tempV + tempIntercept;
-  humidity    = humSlope * humV + humIntercept;
-  irradiance  = irrV;   // raw volts for now
+  return temperature;
+}
 
-  // ---------- ETHERNET ----------
-  EthernetClient client = server.available();
-  if (client) {
-    String cmd = client.readStringUntil('\r');
-    cmd.trim();
 
-    if (cmd == "TEMP?") {
-      client.print(temperature, 2);
-      client.print('\r');
-    }
-    else if (cmd == "RH?") {
-      client.print(humidity, 2);
-      client.print('\r');
-    }
-    else if (cmd == "IRRAD?") {
-      client.print(irradiance, 3);
-      client.print('\r');
-    }
-    else {
-      client.print("NaN\r");
-    }
+// ============================================================
+// Convert humidity sensor voltage to %RH
+//
+// 0.0 V = 0 %RH
+// 1.0 V = 100 %RH
+// ============================================================
+
+float humidityVoltageToRH(float voltage)
+{
+  float rh = voltage * 100.0;
+
+  // Limit value to 0-100 %
+  if (rh < 0.0)
+    rh = 0.0;
+
+  if (rh > 100.0)
+    rh = 100.0;
+
+  return rh;
+}
+
+
+// ============================================================
+// Read both sensor channels and update the global values
+// ============================================================
+
+void readSensors()
+{
+  // ----------------------------------------------------------
+  // Thermistor on ADS1115 A3.
+  // Reaches at least 2.137 V, so GAIN_ONE = +/- 4.096 V.
+  // ----------------------------------------------------------
+
+  ads.setGain(GAIN_ONE);
+
+  int16_t rawTemperature = ads.readADC_SingleEnded(3);
+
+  float thermistorVoltage = ads.computeVolts(rawTemperature);
+
+  temperatureC = thermistorVoltageToTemperature(thermistorVoltage);
+
+
+  // ----------------------------------------------------------
+  // Humidity sensor on ADS1115 A2.
+  // Output is 0-1 V, so GAIN_TWO = +/- 2.048 V for better
+  // resolution.
+  // ----------------------------------------------------------
+
+  ads.setGain(GAIN_TWO);
+
+  int16_t rawHumidity = ads.readADC_SingleEnded(2);
+
+  float humidityVoltage = ads.computeVolts(rawHumidity);
+
+  relativeHumidity = humidityVoltageToRH(humidityVoltage);
+}
+
+
+// ============================================================
+// Handle the TCP command client
+//
+// - Accepts one client at a time
+// - On receiving 'A', takes a fresh reading and replies:
+//   "<temp C>,<RH %>\r\n"
+// ============================================================
+
+void handleTcpClient()
+{
+  // If the current client is gone, drop it and
+  // check for a new incoming connection.
+  if (!client.connected())
+  {
     client.stop();
+
+    client = server.accept();
   }
 
-  delay(1000);
+  if (!client)
+  {
+    return;
+  }
+
+  // Process any received characters
+  while (client.available() > 0)
+  {
+    char c = client.read();
+
+    if (c == 'A')
+    {
+      // Take a fresh reading so the reply is current
+      readSensors();
+
+      client.print(temperatureC, 2);
+      client.print(',');
+      client.print(relativeHumidity, 1);
+      client.print("\r\n");
+    }
+
+    // Everything else (CR, LF, other characters) is ignored
+  }
+}
+
+
+// ============================================================
+// Setup
+// ============================================================
+
+void setup()
+{
+  // ----------------------------------------------------------
+  // Reset W5500
+  // ----------------------------------------------------------
+
+  pinMode(W5500_RESET, OUTPUT);
+
+  digitalWrite(W5500_RESET, LOW);
+  delay(10);
+
+  digitalWrite(W5500_RESET, HIGH);
+  delay(100);
+
+
+  // ----------------------------------------------------------
+  // Configure W5500 SPI pins
+  // ----------------------------------------------------------
+
+  SPI.setRX(W5500_MISO);
+  SPI.setCS(W5500_CS);
+  SPI.setSCK(W5500_SCLK);
+  SPI.setTX(W5500_MOSI);
+
+
+  // ----------------------------------------------------------
+  // Configure static IP and start Ethernet
+  // ----------------------------------------------------------
+
+  eth.config(ip, gateway, subnet, dns);
+
+  if (!eth.begin())
+  {
+    haltBlink(100);
+  }
+
+
+  // ----------------------------------------------------------
+  // Start TCP command server
+  // ----------------------------------------------------------
+
+  server.begin();
+
+
+  // ----------------------------------------------------------
+  // Configure I2C and start ADS1115
+  // ----------------------------------------------------------
+
+  Wire.setSDA(I2C_SDA);
+  Wire.setSCL(I2C_SCL);
+  Wire.begin();
+
+  if (!ads.begin(ADS1115_ADDRESS, &Wire))
+  {
+    haltBlink(500);
+  }
+}
+
+
+// ============================================================
+// Main loop
+// ============================================================
+
+void loop()
+{
+  handleTcpClient();
 }
