@@ -1,1 +1,1 @@
-lorem ipsum
+The code here is used to allow two Arduino Nesso N1's to communicate with each other to trigger s solenoid valve, which in turns bursts a gas into a room at INTERIORS. This can be done for air exchange experiments using methane, for example.
